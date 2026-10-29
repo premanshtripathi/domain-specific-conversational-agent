@@ -41,5 +41,3 @@ sequenceDiagram
     API-->>UI: Answer + sources
     UI-->>User: Render response and citations
 ```
-
-Editable Mermaid source: [conversation-flow.mmd](./conversation-flow.mmd).

@@ -27,5 +27,3 @@ flowchart LR
     RAG <-->|Chat messages / answer| Groq
     API -->|Answer, sources, errors| UI
 ```
-
-Editable Mermaid source: [architecture.mmd](./architecture.mmd).

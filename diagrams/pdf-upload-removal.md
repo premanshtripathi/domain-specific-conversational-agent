@@ -33,5 +33,3 @@ flowchart TD
     DeleteVectors --> DeleteFile[Delete uploaded PDF]
     DeleteFile --> DeleteRecord[Delete SQLite document record]
 ```
-
-Editable Mermaid source: [pdf-upload-removal.mmd](./pdf-upload-removal.mmd).

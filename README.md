@@ -22,8 +22,7 @@ chat; adding one does not erase that chat's existing messages.
 
 ![Lexi-RAG architecture](./images/architecture.svg)
 
-[Open the rendered diagram](./diagrams/architecture.md) ·
-[View Mermaid source](./diagrams/architecture.mmd)
+[Open the rendered diagram](./diagrams/architecture.md)
 
 ### Local data and ownership
 
@@ -44,8 +43,7 @@ ignored by Git.
 
 ![Conversation request flow](./images/conversation-flow.svg)
 
-[Open the rendered diagram](./diagrams/conversation-flow.md) ·
-[View Mermaid source](./diagrams/conversation-flow.mmd)
+[Open the rendered diagram](./diagrams/conversation-flow.md)
 
 The whole conversation is saved; context sent to Groq is intentionally bounded
 to the most recent messages and character budget. There is no automatic
@@ -57,8 +55,7 @@ not to invent document-based facts.
 
 ![PDF upload and removal flow](./images/pdf-upload-removal.svg)
 
-[Open the rendered diagram](./diagrams/pdf-upload-removal.md) ·
-[View Mermaid source](./diagrams/pdf-upload-removal.mmd)
+[Open the rendered diagram](./diagrams/pdf-upload-removal.md)
 
 PDF processing currently runs synchronously in the upload request. The API
 rejects files larger than 20 MiB, non-`.pdf` filenames, and files without a PDF
@@ -185,29 +182,13 @@ Groq key; first-time PDF ingestion downloads/loads the local embedding model.
 
 ## Diagrams
 
-The README embeds pre-rendered SVGs to display the diagrams consistently and
-avoid waiting for Mermaid to render in GitHub. GitHub displays `.mmd` files as
-plain source text, so each diagram also has a Markdown viewer page with a
-Mermaid code block. Open these pages to see the rendered diagram;
-the `.mmd` links contain the editable source. Both are in [`diagrams/`](./diagrams/):
+The README embeds pre-rendered SVGs to display diagrams consistently without
+waiting for Mermaid to render in GitHub. Each diagram also has a Markdown page
+in [`diagrams/`](./diagrams/) with its rendered Mermaid version:
 
-- [Architecture diagram](./diagrams/architecture.md) ([source](./diagrams/architecture.mmd))
-- [Conversation flow diagram](./diagrams/conversation-flow.md) ([source](./diagrams/conversation-flow.mmd))
-- [PDF upload and removal diagram](./diagrams/pdf-upload-removal.md) ([source](./diagrams/pdf-upload-removal.mmd))
-
-The SVGs can be regenerated from the repository root with Mermaid CLI:
-
-```bash
-npx --yes --package @mermaid-js/mermaid-cli mmdc \
-  --input diagrams/architecture.mmd \
-  --output images/architecture.svg \
-  --theme dark \
-  --backgroundColor '#020817' \
-  --configFile diagrams/render-config.json
-```
-
-Use the same command with `conversation-flow` or `pdf-upload-removal` in place
-of `architecture` to regenerate the other diagrams.
+- [Architecture diagram](./diagrams/architecture.md)
+- [Conversation flow diagram](./diagrams/conversation-flow.md)
+- [PDF upload and removal diagram](./diagrams/pdf-upload-removal.md)
 
 ## Current scope and limitations
 
