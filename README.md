@@ -20,31 +20,9 @@ chat; adding one does not erase that chat's existing messages.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    User[User in browser]
-    UI[Streamlit UI<br/>frontend/app.py]
-    API[FastAPI<br/>backend/main.py]
-    Store[ChatStore<br/>SQLite]
-    Uploads[Uploaded PDF files]
-    Loader[PyPDFLoader]
-    Splitter[RecursiveCharacterTextSplitter<br/>1000 chars, 200 overlap]
-    Embed[HuggingFaceEmbeddings<br/>all-MiniLM-L6-v2]
-    Chroma[(Chroma vector database)]
-    RAG[RAG pipeline<br/>backend/rag_pipeline.py]
-    Groq[Groq Chat API<br/>openai/gpt-oss-20b]
+![Lexi-RAG architecture](./images/architecture.svg)
 
-    User <--> UI
-    UI <-->|HTTP JSON / multipart| API
-    API <--> Store
-    API --> Uploads
-    Uploads --> Loader --> Splitter --> Embed --> Chroma
-    API --> RAG
-    RAG --> Store
-    RAG --> Chroma
-    RAG <-->|Chat messages / answer| Groq
-    API -->|Answer, sources, errors| UI
-```
+[View the Mermaid source](./diagrams/architecture.mmd)
 
 ### Local data and ownership
 
@@ -63,45 +41,9 @@ ignored by Git.
 
 ## What happens during a conversation
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant UI as Streamlit
-    participant API as FastAPI
-    participant DB as SQLite
-    participant RAG as RAG pipeline
-    participant VDB as Chroma
-    participant LLM as Groq API
+![Conversation request flow](./images/conversation-flow.svg)
 
-    User->>UI: Open app / select or create chat
-    UI->>API: GET /chats (optional search)
-    API->>DB: Load chat list
-    DB-->>API: Chats ordered by last update
-    API-->>UI: Chat list
-    UI->>API: GET /chats/{chat_id}
-    API->>DB: Load chat, full message history, documents
-    DB-->>UI: Conversation state
-
-    User->>UI: Send message
-    UI->>API: POST /chats/{chat_id}/messages
-    API->>DB: Read recent context (max 40 messages / 16,000 chars)
-    API->>DB: Save user message
-    API->>DB: Find ready document IDs for this chat
-    alt Chat has ready PDFs
-        API->>RAG: Query + history + chat/document IDs
-        RAG->>VDB: Similarity search scoped to chat AND ready documents
-        VDB-->>RAG: Top 3 matching passages + source metadata
-        RAG->>LLM: System instructions + retrieved context + history + question
-    else No ready PDFs
-        API->>RAG: Query + history, no document context
-        RAG->>LLM: General assistant instructions + history + question
-    end
-    LLM-->>RAG: Answer
-    RAG-->>API: Answer + source filename/page list
-    API->>DB: Save assistant answer and sources
-    API-->>UI: Answer + sources
-    UI-->>User: Render response and citations
-```
+[View the Mermaid source](./diagrams/conversation-flow.mmd)
 
 The whole conversation is saved; context sent to Groq is intentionally bounded
 to the most recent messages and character budget. There is no automatic
@@ -111,36 +53,9 @@ not to invent document-based facts.
 
 ## What happens during PDF upload and removal
 
-```mermaid
-flowchart TD
-    Start[User selects PDF in current chat] --> ChatCheck{Chat exists?}
-    ChatCheck -- No --> NotFound[Return 404]
-    ChatCheck -- Yes --> ExtCheck{Filename ends in .pdf?}
-    ExtCheck -- No --> BadType[Return 400]
-    ExtCheck -- Yes --> Stream[Stream upload to unique file in backend/uploads]
-    Stream --> SizeCheck{At most 20 MiB?}
-    SizeCheck -- No --> TooLarge[Return 413 and remove partial file]
-    SizeCheck -- Yes --> Signature{PDF signature in first 1024 bytes?}
-    Signature -- No --> Invalid[Return 400 and remove file]
-    Signature -- Yes --> Record[Create SQLite document record: processing]
-    Record --> Parse[PyPDFLoader extracts pages and page metadata]
-    Parse --> Split[Split text into 1000-character chunks<br/>with 200-character overlap]
-    Split --> Embed[Generate local embeddings]
-    Embed --> Index[Add chunks to Chroma with chat, document,<br/>filename, and page metadata]
-    Index --> Ready[Set SQLite status to ready]
-    Ready --> Result[Return success; preserve chat messages]
-    Parse -. Processing error .-> Failed[Remove file and partial vectors;<br/>mark document failed]
-    Split -. Processing error .-> Failed
-    Embed -. Processing error .-> Failed
-    Index -. Processing error .-> Failed
+![PDF upload and removal flow](./images/pdf-upload-removal.svg)
 
-    Remove[User removes a PDF] --> Find[Verify chat and document ownership]
-    Find --> Processing{Still processing?}
-    Processing -- Yes --> Conflict[Return 409]
-    Processing -- No --> DeleteVectors[Delete matching Chroma records]
-    DeleteVectors --> DeleteFile[Delete uploaded PDF]
-    DeleteFile --> DeleteRecord[Delete SQLite document record]
-```
+[View the Mermaid source](./diagrams/pdf-upload-removal.mmd)
 
 PDF processing currently runs synchronously in the upload request. The API
 rejects files larger than 20 MiB, non-`.pdf` filenames, and files without a PDF
@@ -264,6 +179,30 @@ python -m unittest discover -s tests -v
 Tests use temporary SQLite/vector-independent fixtures and mock external model
 and PDF processing calls where appropriate. Real answers require a working
 Groq key; first-time PDF ingestion downloads/loads the local embedding model.
+
+## Diagrams
+
+The README embeds pre-rendered SVGs to display the diagrams consistently and
+avoid waiting for Mermaid to render in GitHub. Editable Mermaid source files are
+in [`diagrams/`](./diagrams/):
+
+- [Architecture](./diagrams/architecture.mmd)
+- [Conversation flow](./diagrams/conversation-flow.mmd)
+- [PDF upload and removal](./diagrams/pdf-upload-removal.mmd)
+
+The SVGs can be regenerated from the repository root with Mermaid CLI:
+
+```bash
+npx --yes --package @mermaid-js/mermaid-cli mmdc \
+  --input diagrams/architecture.mmd \
+  --output images/architecture.svg \
+  --theme dark \
+  --backgroundColor '#020817' \
+  --configFile diagrams/render-config.json
+```
+
+Use the same command with `conversation-flow` or `pdf-upload-removal` in place
+of `architecture` to regenerate the other diagrams.
 
 ## Current scope and limitations
 

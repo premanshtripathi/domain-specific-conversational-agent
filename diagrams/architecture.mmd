@@ -1,0 +1,23 @@
+flowchart LR
+    User[User in browser]
+    UI[Streamlit UI<br/>frontend/app.py]
+    API[FastAPI<br/>backend/main.py]
+    Store[ChatStore<br/>SQLite]
+    Uploads[Uploaded PDF files]
+    Loader[PyPDFLoader]
+    Splitter[RecursiveCharacterTextSplitter<br/>1000 chars, 200 overlap]
+    Embed[HuggingFaceEmbeddings<br/>all-MiniLM-L6-v2]
+    Chroma[(Chroma vector database)]
+    RAG[RAG pipeline<br/>backend/rag_pipeline.py]
+    Groq[Groq Chat API<br/>openai/gpt-oss-20b]
+
+    User <--> UI
+    UI <-->|HTTP JSON / multipart| API
+    API <--> Store
+    API --> Uploads
+    Uploads --> Loader --> Splitter --> Embed --> Chroma
+    API --> RAG
+    RAG --> Store
+    RAG --> Chroma
+    RAG <-->|Chat messages / answer| Groq
+    API -->|Answer, sources, errors| UI

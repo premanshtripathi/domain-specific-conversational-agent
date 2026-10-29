@@ -1,0 +1,28 @@
+flowchart TD
+    Start[User selects PDF in current chat] --> ChatCheck{Chat exists?}
+    ChatCheck -- No --> NotFound[Return 404]
+    ChatCheck -- Yes --> ExtCheck{Filename ends in .pdf?}
+    ExtCheck -- No --> BadType[Return 400]
+    ExtCheck -- Yes --> Stream[Stream upload to unique file in backend/uploads]
+    Stream --> SizeCheck{At most 20 MiB?}
+    SizeCheck -- No --> TooLarge[Return 413 and remove partial file]
+    SizeCheck -- Yes --> Signature{PDF signature in first 1024 bytes?}
+    Signature -- No --> Invalid[Return 400 and remove file]
+    Signature -- Yes --> Record[Create SQLite document record: processing]
+    Record --> Parse[PyPDFLoader extracts pages and page metadata]
+    Parse --> Split[Split text into 1000-character chunks<br/>with 200-character overlap]
+    Split --> Embed[Generate local embeddings]
+    Embed --> Index[Add chunks to Chroma with chat, document,<br/>filename, and page metadata]
+    Index --> Ready[Set SQLite status to ready]
+    Ready --> Result[Return success; preserve chat messages]
+    Parse -. Processing error .-> Failed[Remove file and partial vectors;<br/>mark document failed]
+    Split -. Processing error .-> Failed
+    Embed -. Processing error .-> Failed
+    Index -. Processing error .-> Failed
+
+    Remove[User removes a PDF] --> Find[Verify chat and document ownership]
+    Find --> Processing{Still processing?}
+    Processing -- Yes --> Conflict[Return 409]
+    Processing -- No --> DeleteVectors[Delete matching Chroma records]
+    DeleteVectors --> DeleteFile[Delete uploaded PDF]
+    DeleteFile --> DeleteRecord[Delete SQLite document record]
