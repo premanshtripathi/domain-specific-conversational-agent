@@ -1,122 +1,225 @@
-import streamlit as st
 import requests
+import streamlit as st
 
-# Constants
+
 API_BASE_URL = "http://127.0.0.1:8000"
+REQUEST_TIMEOUT = 30
 
-# Set up the Streamlit page configuration
+
+def error_detail(response: requests.Response) -> str:
+    try:
+        return str(response.json().get("detail", response.text))
+    except ValueError:
+        return response.text or f"Request failed with status {response.status_code}."
+
+
+def request_json(method: str, path: str, **kwargs) -> dict:
+    response = requests.request(
+        method,
+        f"{API_BASE_URL}{path}",
+        timeout=kwargs.pop("timeout", REQUEST_TIMEOUT),
+        **kwargs,
+    )
+    if not response.ok:
+        raise RuntimeError(error_detail(response))
+    return response.json()
+
+
 st.set_page_config(
     page_title="Lexi-RAG Assistant",
     page_icon="📚",
-    layout="wide"
+    layout="wide",
 )
 
-# Custom CSS for a cleaner, academic look
-st.markdown("""
-<style>
-    .stChatFloatingInputContainer {
-        padding-bottom: 20px;
-    }
-    .source-box {
-        font-size: 0.8em;
-        color: #4CAF50;
-        background-color: #e8f5e9;
-        padding: 4px 8px;
-        border-radius: 4px;
-        margin-top: 8px;
-        display: inline-block;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.title("📚 Lexi-RAG: Domain-Specific Assistant")
+st.markdown(
+    "Chat normally, then add PDFs to a conversation whenever you need "
+    "document-grounded answers. Your chats and messages are saved locally."
+)
 
-st.title("📚 Lexi-RAG: Domain-Specific Document Assistant")
-st.markdown("Upload a PDF document to provide context, and then ask questions. The assistant will answer strictly based on the uploaded document and cite the page numbers.")
+try:
+    chats = request_json("GET", "/chats")["chats"]
+    if not chats:
+        created = request_json("POST", "/chats", json={"title": "New chat"})
+        chats = [created["chat"]]
+except (requests.RequestException, RuntimeError, KeyError) as exc:
+    st.error(f"Could not load saved chats. Is the FastAPI backend running? {exc}")
+    st.stop()
 
-# Initialize chat history in session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+chat_ids = [chat["id"] for chat in chats]
+chat_by_id = {chat["id"]: chat for chat in chats}
+if st.session_state.get("selected_chat_id") not in chat_by_id:
+    st.session_state.selected_chat_id = chat_ids[0]
 
-# Sidebar for file upload
 with st.sidebar:
-    st.header("1. Upload Knowledge Base")
-    uploaded_file = st.file_uploader("Upload a PDF document", type="pdf")
-    
-    if st.button("Process Document"):
-        if uploaded_file is not None:
-            with st.spinner("Processing document and generating embeddings... This may take a moment."):
-                try:
-                    # Send the file to the FastAPI backend
-                    files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-                    response = requests.post(f"{API_BASE_URL}/upload", files=files)
-                    
-                    if response.status_code == 200:
-                        st.success("Document processed successfully! You can now ask questions.")
-                        # Clear chat history when a new document is uploaded
-                        st.session_state.messages = []
-                    else:
-                        st.error(f"Error processing document: {response.json().get('detail', 'Unknown error')}")
-                except Exception as e:
-                    st.error(f"Failed to connect to the backend server. Is FastAPI running? Error: {str(e)}")
-        else:
-            st.warning("Please upload a PDF file first.")
-            
-    st.markdown("---")
-    st.subheader("System Architecture")
-    st.markdown("- **UI:** Streamlit\n- **Backend:** FastAPI\n- **RAG Engine:** LangChain\n- **Vector DB:** Chroma\n- **LLM:** Llama-3 (Groq API)")
+    st.header("Chats")
+    if st.button("＋ New chat", use_container_width=True):
+        try:
+            created = request_json("POST", "/chats", json={"title": "New chat"})
+            st.session_state.selected_chat_id = created["chat"]["id"]
+            st.rerun()
+        except (requests.RequestException, RuntimeError, KeyError) as exc:
+            st.error(f"Could not create chat: {exc}")
 
-# Display chat history
-st.header("2. Chat with Document")
-for message in st.session_state.messages:
+    chat_search = st.text_input("Search chats", max_chars=100)
+    if chat_search.strip():
+        try:
+            visible_chats = request_json(
+                "GET",
+                "/chats",
+                params={"search": chat_search.strip()},
+            )["chats"]
+        except (requests.RequestException, RuntimeError, KeyError) as exc:
+            st.error(f"Could not search chats: {exc}")
+            visible_chats = []
+    else:
+        visible_chats = chats
+
+    if visible_chats:
+        visible_chat_ids = [chat["id"] for chat in visible_chats]
+        if st.session_state.selected_chat_id not in visible_chat_ids:
+            st.session_state.selected_chat_id = visible_chat_ids[0]
+        selected_chat_id = st.selectbox(
+            "Saved conversations",
+            options=visible_chat_ids,
+            format_func=lambda chat_id: chat_by_id[chat_id]["title"],
+            key="selected_chat_id",
+        )
+    else:
+        st.caption("No chats match that search. The current conversation stays open.")
+        selected_chat_id = st.session_state.selected_chat_id
+
+    selected_chat = chat_by_id[selected_chat_id]
+
+    with st.expander("Chat settings"):
+        new_title = st.text_input(
+            "Chat title",
+            value=selected_chat["title"],
+            key=f"title_{selected_chat_id}",
+            max_chars=100,
+        )
+        if st.button("Rename chat", key=f"rename_{selected_chat_id}"):
+            try:
+                request_json(
+                    "PATCH",
+                    f"/chats/{selected_chat_id}",
+                    json={"title": new_title},
+                )
+                st.rerun()
+            except (requests.RequestException, RuntimeError) as exc:
+                st.error(f"Could not rename chat: {exc}")
+
+        confirm_delete = st.checkbox(
+            "Confirm deleting this chat and its documents",
+            key=f"confirm_delete_{selected_chat_id}",
+        )
+        if st.button(
+            "Delete chat",
+            key=f"delete_{selected_chat_id}",
+            disabled=not confirm_delete,
+        ):
+            try:
+                request_json("DELETE", f"/chats/{selected_chat_id}")
+                st.rerun()
+            except (requests.RequestException, RuntimeError) as exc:
+                st.error(f"Could not delete chat: {exc}")
+
+    st.divider()
+    st.subheader("Add context to this chat")
+    uploaded_file = st.file_uploader(
+        "Upload a PDF",
+        type=["pdf"],
+        key=f"upload_{selected_chat_id}",
+    )
+    if st.button("Add PDF to chat", disabled=uploaded_file is None):
+        if uploaded_file is not None:
+            with st.spinner("Processing PDF and creating embeddings..."):
+                try:
+                    request_json(
+                        "POST",
+                        f"/chats/{selected_chat_id}/documents",
+                        files={
+                            "file": (
+                                uploaded_file.name,
+                                uploaded_file.getvalue(),
+                                "application/pdf",
+                            )
+                        },
+                        timeout=300,
+                    )
+                    st.success("PDF added. Your existing conversation was preserved.")
+                except (requests.RequestException, RuntimeError) as exc:
+                    st.error(f"Could not process PDF: {exc}")
+
+    st.caption("PDFs are only used in the conversation they were added to.")
+
+try:
+    chat_data = request_json("GET", f"/chats/{selected_chat_id}")
+except (requests.RequestException, RuntimeError, KeyError) as exc:
+    st.error(f"Could not load this conversation: {exc}")
+    st.stop()
+
+documents = chat_data["documents"]
+if documents:
+    st.caption(
+        "Attached documents: "
+        + ", ".join(
+            f"{document['filename']} ({document['status']})"
+            for document in documents
+        )
+    )
+    with st.expander("Manage attached PDFs"):
+        for document in documents:
+            document_columns = st.columns([5, 1])
+            document_columns[0].write(
+                f"**{document['filename']}** · {document['status']}"
+            )
+            if document_columns[1].button(
+                "Remove",
+                key=f"remove_document_{selected_chat_id}_{document['id']}",
+                disabled=document["status"] == "processing",
+            ):
+                try:
+                    request_json(
+                        "DELETE",
+                        f"/chats/{selected_chat_id}/documents/{document['id']}",
+                    )
+                    st.rerun()
+                except (requests.RequestException, RuntimeError) as exc:
+                    st.error(f"Could not remove PDF: {exc}")
+else:
+    st.caption("No documents attached. You can chat normally or add a PDF in the sidebar.")
+
+for message in chat_data["messages"]:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        if "sources" in message and message["sources"]:
-            sources_str = ", ".join([str(s) for s in message["sources"]])
-            st.markdown(f'<div class="source-box">Sources: Page(s) {sources_str}</div>', unsafe_allow_html=True)
+        if message["sources"]:
+            source_labels = [
+                f"{source['filename']} (page {source['page']})"
+                for source in message["sources"]
+            ]
+            st.caption("Sources: " + ", ".join(source_labels))
 
-# Chat input
-if prompt := st.chat_input("Ask a question about the uploaded document..."):
-    # Display user message in chat message container
+if prompt := st.chat_input("Message Lexi-RAG..."):
     with st.chat_message("user"):
         st.markdown(prompt)
-    
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # Get bot response
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        
-        with st.spinner("Searching document and generating answer..."):
+        with st.spinner("Thinking..."):
             try:
-                # Send the query to the FastAPI backend
-                payload = {"query": prompt}
-                response = requests.post(f"{API_BASE_URL}/chat", json=payload)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    answer = data.get("answer", "No answer received.")
-                    sources = data.get("sources", [])
-                    
-                    # Display the answer
-                    message_placeholder.markdown(answer)
-                    
-                    # Display sources if available
-                    if sources:
-                        sources_str = ", ".join([str(s) for s in sources])
-                        st.markdown(f'<div class="source-box">Sources: Page(s) {sources_str}</div>', unsafe_allow_html=True)
-                        
-                    # Add assistant response to chat history
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": answer,
-                        "sources": sources
-                    })
-                else:
-                    error_msg = f"Error: {response.json().get('detail', 'Unknown error')}"
-                    message_placeholder.error(error_msg)
-                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
-                    
-            except Exception as e:
-                error_msg = f"Failed to connect to the backend server. Error: {str(e)}"
-                message_placeholder.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                result = request_json(
+                    "POST",
+                    f"/chats/{selected_chat_id}/messages",
+                    json={"content": prompt},
+                    timeout=180,
+                )
+                st.markdown(result["answer"])
+                if result["sources"]:
+                    source_labels = [
+                        f"{source['filename']} (page {source['page']})"
+                        for source in result["sources"]
+                    ]
+                    st.caption("Sources: " + ", ".join(source_labels))
+                st.rerun()
+            except (requests.RequestException, RuntimeError, KeyError) as exc:
+                st.error(f"Error generating response: {exc}")

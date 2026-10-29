@@ -177,4 +177,8 @@ pyrightconfig.json
 
 backend/__pycache__
 backend/chroma_db
+backend/chat_data.sqlite3
+backend/chat_data.sqlite3-shm
+backend/chat_data.sqlite3-wal
+backend/uploads/
 data/*
