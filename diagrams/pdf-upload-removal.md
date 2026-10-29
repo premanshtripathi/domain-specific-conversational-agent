@@ -1,3 +1,9 @@
+# PDF Upload and Removal
+
+This page renders PDF validation, indexing, cleanup, and removal in GitHub's
+Mermaid viewer.
+
+```mermaid
 flowchart TD
     Start[User selects PDF in current chat] --> ChatCheck{Chat exists?}
     ChatCheck -- No --> NotFound[Return 404]
@@ -26,3 +32,6 @@ flowchart TD
     Processing -- No --> DeleteVectors[Delete matching Chroma records]
     DeleteVectors --> DeleteFile[Delete uploaded PDF]
     DeleteFile --> DeleteRecord[Delete SQLite document record]
+```
+
+Editable Mermaid source: [pdf-upload-removal.mmd](./pdf-upload-removal.mmd).

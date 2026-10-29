@@ -1,3 +1,8 @@
+# Lexi-RAG Architecture
+
+This page renders the architecture diagram in GitHub's Mermaid viewer.
+
+```mermaid
 flowchart LR
     User[User in browser]
     UI[Streamlit UI<br/>frontend/app.py]
@@ -21,3 +26,6 @@ flowchart LR
     RAG --> Chroma
     RAG <-->|Chat messages / answer| Groq
     API -->|Answer, sources, errors| UI
+```
+
+Editable Mermaid source: [architecture.mmd](./architecture.mmd).

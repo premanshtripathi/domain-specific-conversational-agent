@@ -1,3 +1,8 @@
+# Conversation Flow
+
+This page renders the conversation lifecycle in GitHub's Mermaid viewer.
+
+```mermaid
 sequenceDiagram
     actor User
     participant UI as Streamlit
@@ -35,3 +40,6 @@ sequenceDiagram
     API->>DB: Save assistant answer and sources
     API-->>UI: Answer + sources
     UI-->>User: Render response and citations
+```
+
+Editable Mermaid source: [conversation-flow.mmd](./conversation-flow.mmd).
