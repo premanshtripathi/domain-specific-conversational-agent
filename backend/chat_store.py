@@ -7,6 +7,8 @@ from uuid import uuid4
 
 
 DATABASE_PATH = Path(__file__).parent / "chat_data.sqlite3"
+MAX_HISTORY_MESSAGES = 40
+MAX_HISTORY_CHARS = 16000
 
 
 def _now() -> str:
@@ -70,15 +72,23 @@ class ChatStore:
             raise RuntimeError("The newly created chat could not be loaded.")
         return chat
 
-    def list_chats(self) -> list[dict[str, Any]]:
+    def list_chats(self, search: str = "") -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT c.id, c.title, c.created_at, c.updated_at,
                        (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id) AS message_count
                 FROM chats c
+                WHERE ? = ''
+                   OR instr(lower(c.title), lower(?)) > 0
+                   OR EXISTS (
+                       SELECT 1 FROM messages m
+                       WHERE m.chat_id = c.id
+                         AND instr(lower(m.content), lower(?)) > 0
+                   )
                 ORDER BY c.updated_at DESC, c.id
-                """
+                """,
+                (search, search, search),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -149,7 +159,12 @@ class ChatStore:
             messages.append(message)
         return messages
 
-    def recent_messages(self, chat_id: str, limit: int = 20) -> list[dict[str, str]]:
+    def recent_messages(
+        self,
+        chat_id: str,
+        limit: int = MAX_HISTORY_MESSAGES,
+        max_chars: int = MAX_HISTORY_CHARS,
+    ) -> list[dict[str, str]]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -158,7 +173,16 @@ class ChatStore:
                 """,
                 (chat_id, limit),
             ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        messages = [dict(row) for row in reversed(rows)]
+        bounded_messages: list[dict[str, str]] = []
+        remaining_chars = max_chars
+        for message in reversed(messages):
+            message_size = len(message["content"])
+            if message_size > remaining_chars:
+                break
+            bounded_messages.append(message)
+            remaining_chars -= message_size
+        return list(reversed(bounded_messages))
 
     def add_document(
         self, chat_id: str, document_id: str, filename: str, stored_path: str
@@ -195,13 +219,36 @@ class ChatStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def ready_document_count(self, chat_id: str) -> int:
+    def get_document(self, chat_id: str, document_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) FROM documents WHERE chat_id = ? AND status = 'ready'",
-                (chat_id,),
+                """
+                SELECT id, filename, stored_path, status, created_at
+                FROM documents WHERE chat_id = ? AND id = ?
+                """,
+                (chat_id, document_id),
             ).fetchone()
-        return int(row[0])
+        return dict(row) if row else None
+
+    def ready_document_ids(self, chat_id: str) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id FROM documents
+                WHERE chat_id = ? AND status = 'ready'
+                ORDER BY created_at, id
+                """,
+                (chat_id,),
+            ).fetchall()
+        return [str(row["id"]) for row in rows]
+
+    def delete_document(self, chat_id: str, document_id: str) -> bool:
+        with self._connect() as connection:
+            result = connection.execute(
+                "DELETE FROM documents WHERE chat_id = ? AND id = ?",
+                (chat_id, document_id),
+            )
+        return result.rowcount > 0
 
     def document_paths(self, chat_id: str) -> list[str]:
         with self._connect() as connection:

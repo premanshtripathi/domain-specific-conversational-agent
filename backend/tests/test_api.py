@@ -93,6 +93,82 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/chats/{chat_id}").status_code, 404)
         delete_vectors.assert_called_once_with(chat_id)
 
+    @patch("main.process_pdf_and_create_vector_db")
+    @patch("main.MAX_UPLOAD_SIZE_BYTES", 10)
+    def test_upload_rejects_files_over_size_limit_without_saving_them(
+        self, process_pdf
+    ):
+        chat_id = self.client.post("/chats", json={}).json()["chat"]["id"]
+
+        response = self.client.post(
+            f"/chats/{chat_id}/documents",
+            files={"file": ("large.pdf", b"%PDF-1.4\n12345", "application/pdf")},
+        )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(main.store.list_documents(chat_id), [])
+        self.assertEqual(list(main.UPLOAD_DIR.iterdir()), [])
+        process_pdf.assert_not_called()
+
+    @patch("main.process_pdf_and_create_vector_db")
+    @patch("main.delete_document_vectors")
+    def test_document_can_be_removed_without_deleting_its_chat(
+        self, delete_vectors, process_pdf
+    ):
+        chat_id = self.client.post("/chats", json={}).json()["chat"]["id"]
+        upload = self.client.post(
+            f"/chats/{chat_id}/documents",
+            files={"file": ("notes.pdf", b"%PDF-1.4\n", "application/pdf")},
+        )
+        document_id = upload.json()["document"]["id"]
+        stored_file = main.UPLOAD_DIR / f"{document_id}.pdf"
+        self.assertTrue(stored_file.exists())
+
+        deleted = self.client.delete(
+            f"/chats/{chat_id}/documents/{document_id}"
+        )
+
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse(stored_file.exists())
+        self.assertEqual(self.client.get(f"/chats/{chat_id}").json()["documents"], [])
+        self.assertIsNotNone(main.store.get_chat(chat_id))
+        delete_vectors.assert_called_once_with(chat_id, document_id)
+
+    def test_upload_rejects_pdf_extension_without_pdf_signature(self):
+        chat_id = self.client.post("/chats", json={}).json()["chat"]["id"]
+
+        response = self.client.post(
+            f"/chats/{chat_id}/documents",
+            files={"file": ("not-a-pdf.pdf", b"plain text", "application/pdf")},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(main.store.list_documents(chat_id), [])
+        self.assertEqual(list(main.UPLOAD_DIR.iterdir()), [])
+
+    @patch("main.delete_document_vectors")
+    @patch(
+        "main.process_pdf_and_create_vector_db",
+        side_effect=ValueError("The PDF has no readable text."),
+    )
+    def test_failed_pdf_processing_is_not_marked_ready_or_retrieved(
+        self, process_pdf, delete_vectors
+    ):
+        chat_id = self.client.post("/chats", json={}).json()["chat"]["id"]
+
+        response = self.client.post(
+            f"/chats/{chat_id}/documents",
+            files={"file": ("empty.pdf", b"%PDF-1.4\n", "application/pdf")},
+        )
+
+        self.assertEqual(response.status_code, 500)
+        document = main.store.list_documents(chat_id)[0]
+        self.assertEqual(document["status"], "failed")
+        self.assertEqual(list(main.UPLOAD_DIR.iterdir()), [])
+        self.assertEqual(main.store.ready_document_ids(chat_id), [])
+        process_pdf.assert_called_once()
+        delete_vectors.assert_called_once_with(chat_id, document["id"])
+
 
 if __name__ == "__main__":
     unittest.main()

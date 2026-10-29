@@ -89,13 +89,19 @@ def ask_question(
     chat_id: str,
     history: list[dict[str, str]],
     has_documents: bool,
+    document_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     retrieved_documents = []
-    if has_documents:
+    if has_documents and document_ids:
         retrieved_documents = _vector_store().similarity_search(
             query,
             k=3,
-            filter={"chat_id": chat_id},
+            filter={
+                "$and": [
+                    {"chat_id": chat_id},
+                    {"document_id": {"$in": document_ids}},
+                ]
+            },
         )
 
     if retrieved_documents:

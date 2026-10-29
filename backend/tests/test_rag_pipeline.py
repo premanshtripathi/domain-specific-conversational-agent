@@ -55,12 +55,18 @@ class RagPipelineTests(unittest.TestCase):
             "chat-2",
             [],
             has_documents=True,
+            document_ids=["document-1", "document-2"],
         )
 
         vector_store.return_value.similarity_search.assert_called_once_with(
             "What does the lecture note say?",
             k=3,
-            filter={"chat_id": "chat-2"},
+            filter={
+                "$and": [
+                    {"chat_id": "chat-2"},
+                    {"document_id": {"$in": ["document-1", "document-2"]}},
+                ]
+            },
         )
         self.assertEqual(
             response["sources"],

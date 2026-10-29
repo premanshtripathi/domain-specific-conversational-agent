@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from chat_store import ChatStore
@@ -17,6 +17,8 @@ from rag_pipeline import (
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent
 UPLOAD_DIR = BASE_DIR / "uploads"
+MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 store = ChatStore()
 store.initialize()
@@ -41,8 +43,8 @@ class ChatMessageRequest(BaseModel):
 
 
 @app.get("/chats")
-def list_chats():
-    return {"chats": store.list_chats()}
+def list_chats(search: str = Query(default="", max_length=100)):
+    return {"chats": store.list_chats(search.strip())}
 
 
 @app.post("/chats", status_code=201)
@@ -89,12 +91,15 @@ def delete_chat(chat_id: str):
                 status_code=500, detail=f"Could not delete chat documents: {exc}"
             ) from exc
 
-    store.delete_chat(chat_id)
     for stored_path in stored_paths:
         try:
             Path(stored_path).unlink(missing_ok=True)
-        except OSError:
+        except OSError as exc:
             logger.exception("Could not remove uploaded file %s", stored_path)
+            raise HTTPException(
+                status_code=500, detail=f"Could not remove uploaded file: {exc}"
+            ) from exc
+    store.delete_chat(chat_id)
     return {"status": "success"}
 
 
@@ -108,12 +113,28 @@ async def upload_document(chat_id: str, file: UploadFile = File(...)):
 
     document_id = str(uuid4())
     file_path = UPLOAD_DIR / f"{document_id}.pdf"
+    document_record_created = False
+    vectors_may_exist = False
     try:
-        contents = await file.read()
-        if b"%PDF-" not in contents[:1024]:
+        header = bytearray()
+        total_size = 0
+        with file_path.open("wb") as saved_file:
+            while chunk := await file.read(UPLOAD_CHUNK_SIZE):
+                total_size += len(chunk)
+                if total_size > MAX_UPLOAD_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="PDF exceeds the 20 MiB upload limit.",
+                    )
+                if len(header) < 1024:
+                    header.extend(chunk[: 1024 - len(header)])
+                saved_file.write(chunk)
+
+        if b"%PDF-" not in header:
             raise HTTPException(status_code=400, detail="The uploaded file is not a valid PDF.")
-        file_path.write_bytes(contents)
         store.add_document(chat_id, document_id, Path(filename).name, str(file_path))
+        document_record_created = True
+        vectors_may_exist = True
         process_pdf_and_create_vector_db(str(file_path), chat_id, document_id, filename)
         store.set_document_status(document_id, "ready")
     except HTTPException:
@@ -121,12 +142,17 @@ async def upload_document(chat_id: str, file: UploadFile = File(...)):
         raise
     except Exception as exc:
         logger.exception("Could not process uploaded document %s", filename)
-        try:
-            delete_document_vectors(chat_id, document_id)
-        except Exception:
-            logger.exception("Could not roll back vectors for document %s", document_id)
+        if vectors_may_exist:
+            try:
+                delete_document_vectors(chat_id, document_id)
+            except Exception:
+                logger.exception("Could not roll back vectors for document %s", document_id)
         file_path.unlink(missing_ok=True)
-        store.set_document_status(document_id, "failed")
+        if document_record_created:
+            try:
+                store.set_document_status(document_id, "failed")
+            except Exception:
+                logger.exception("Could not mark document %s as failed", document_id)
         raise HTTPException(
             status_code=500, detail=f"Error processing document: {exc}"
         ) from exc
@@ -144,6 +170,31 @@ async def upload_document(chat_id: str, file: UploadFile = File(...)):
     }
 
 
+@app.delete("/chats/{chat_id}/documents/{document_id}")
+def delete_document(chat_id: str, document_id: str):
+    if store.get_chat(chat_id) is None:
+        raise HTTPException(status_code=404, detail="Chat not found.")
+    document = store.get_document(chat_id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found in this chat.")
+    if document["status"] == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail="This document is still processing. Try again when processing completes.",
+        )
+
+    try:
+        delete_document_vectors(chat_id, document_id)
+        Path(document["stored_path"]).unlink(missing_ok=True)
+        store.delete_document(chat_id, document_id)
+    except Exception as exc:
+        logger.exception("Could not remove document %s from chat %s", document_id, chat_id)
+        raise HTTPException(
+            status_code=500, detail=f"Could not remove document: {exc}"
+        ) from exc
+    return {"status": "success"}
+
+
 @app.post("/chats/{chat_id}/messages")
 def send_message(chat_id: str, request: ChatMessageRequest):
     if store.get_chat(chat_id) is None:
@@ -152,14 +203,16 @@ def send_message(chat_id: str, request: ChatMessageRequest):
     if not content:
         raise HTTPException(status_code=422, detail="Message cannot be blank.")
 
+    history = store.recent_messages(chat_id)
     store.add_message(chat_id, "user", content)
-    history = store.recent_messages(chat_id)[:-1]
+    ready_document_ids = store.ready_document_ids(chat_id)
     try:
         response_data = ask_question(
             content,
             chat_id,
             history,
-            has_documents=store.ready_document_count(chat_id) > 0,
+            has_documents=bool(ready_document_ids),
+            document_ids=ready_document_ids,
         )
     except Exception as exc:
         logger.exception("Could not generate an answer for chat %s", chat_id)

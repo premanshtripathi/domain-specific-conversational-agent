@@ -61,12 +61,34 @@ with st.sidebar:
         except (requests.RequestException, RuntimeError, KeyError) as exc:
             st.error(f"Could not create chat: {exc}")
 
-    selected_chat_id = st.selectbox(
-        "Saved conversations",
-        options=chat_ids,
-        format_func=lambda chat_id: chat_by_id[chat_id]["title"],
-        key="selected_chat_id",
-    )
+    chat_search = st.text_input("Search chats", max_chars=100)
+    if chat_search.strip():
+        try:
+            visible_chats = request_json(
+                "GET",
+                "/chats",
+                params={"search": chat_search.strip()},
+            )["chats"]
+        except (requests.RequestException, RuntimeError, KeyError) as exc:
+            st.error(f"Could not search chats: {exc}")
+            visible_chats = []
+    else:
+        visible_chats = chats
+
+    if visible_chats:
+        visible_chat_ids = [chat["id"] for chat in visible_chats]
+        if st.session_state.selected_chat_id not in visible_chat_ids:
+            st.session_state.selected_chat_id = visible_chat_ids[0]
+        selected_chat_id = st.selectbox(
+            "Saved conversations",
+            options=visible_chat_ids,
+            format_func=lambda chat_id: chat_by_id[chat_id]["title"],
+            key="selected_chat_id",
+        )
+    else:
+        st.caption("No chats match that search. The current conversation stays open.")
+        selected_chat_id = st.session_state.selected_chat_id
+
     selected_chat = chat_by_id[selected_chat_id]
 
     with st.expander("Chat settings"):
@@ -146,6 +168,25 @@ if documents:
             for document in documents
         )
     )
+    with st.expander("Manage attached PDFs"):
+        for document in documents:
+            document_columns = st.columns([5, 1])
+            document_columns[0].write(
+                f"**{document['filename']}** · {document['status']}"
+            )
+            if document_columns[1].button(
+                "Remove",
+                key=f"remove_document_{selected_chat_id}_{document['id']}",
+                disabled=document["status"] == "processing",
+            ):
+                try:
+                    request_json(
+                        "DELETE",
+                        f"/chats/{selected_chat_id}/documents/{document['id']}",
+                    )
+                    st.rerun()
+                except (requests.RequestException, RuntimeError) as exc:
+                    st.error(f"Could not remove PDF: {exc}")
 else:
     st.caption("No documents attached. You can chat normally or add a PDF in the sidebar.")
 
